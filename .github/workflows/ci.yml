@@ -40,7 +40,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit tests
-        run: bun test tests/state.test.ts --reporter=verbose
+        run: bun test tests/state.test.ts --reporter=dots
 
   # ── Job 2: E2E Integration tests ──────────────────────────────────────────
   e2e:
@@ -70,13 +70,13 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: E2E — happy path
-        run: bun test tests/integration/happy-path.test.ts --reporter=verbose
+        run: bun test tests/integration/happy-path.test.ts --reporter=dots
 
       - name: E2E — retry flow
-        run: bun test tests/integration/retry-flow.test.ts --reporter=verbose
+        run: bun test tests/integration/retry-flow.test.ts --reporter=dots
 
       - name: E2E — reviewer requeue
-        run: bun test tests/integration/reviewer-requeue.test.ts --reporter=verbose
+        run: bun test tests/integration/reviewer-requeue.test.ts --reporter=dots
 
   # ── Job 3: Build ──────────────────────────────────────────────────────────
   build:
