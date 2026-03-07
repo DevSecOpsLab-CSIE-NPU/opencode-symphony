@@ -44,10 +44,11 @@ export async function executeCommands(
   deps: CommandDeps,
 ): Promise<void> {
   for (const cmd of commands) {
-    // Fire-and-forget: each command runs independently; errors emitted back as events
-    void executeOneCommand(cmd, deps);
+    // Execute commands sequentially to ensure proper ordering
+    await executeOneCommand(cmd, deps);
   }
 }
+
 
 async function executeOneCommand(cmd: OrchestratorCommand, deps: CommandDeps): Promise<void> {
   switch (cmd.type) {
@@ -64,6 +65,12 @@ async function executeOneCommand(cmd: OrchestratorCommand, deps: CommandDeps): P
       break;
 
     case "close_session":
+      // Stateless implementation: no persistent app-server process to close.
+      break;
+
+    case "update_linear_state":
+      await handleUpdateLinearState(cmd.issueId, cmd.stateId, deps);
+      break;
       // Stateless implementation: no persistent app-server process to close.
       break;
 
@@ -230,6 +237,31 @@ async function handleSpawnReviewer(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
+
+// ─────────────────────────────────────────────────────────────────────────────
+// update_linear_state
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function handleUpdateLinearState(issueId: IssueId, stateId: string, deps: CommandDeps): Promise<void> {
+  const state = deps.getState();
+  const issue = state.issuesById.get(issueId);
+  if (!issue) {
+    console.warn(`[commands] update_linear_state: unknown issueId=${issueId}`);
+    return;
+  }
+
+  try {
+    await deps.linear.updateIssueState(issue.id, stateId);
+    console.log(`[commands] Updated Linear state for issue ${issue.key} (${issue.id}) to stateId=${stateId}`);
+  } catch (err) {
+    console.warn(
+      `[commands] Failed to update Linear state for issue ${issue.key}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    // Don't fail the entire orchestrator if Linear API call fails
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function recordAttempt(state: OrchestratorState, issueId: IssueId, attemptId: AttemptId): void {

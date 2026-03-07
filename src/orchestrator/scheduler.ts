@@ -34,20 +34,27 @@ export class Scheduler {
   ) {}
 
   start(): void {
+    console.log("[Scheduler] start: tickIntervalMs=%d pollIntervalMs=%d", this.tickIntervalMs, this.pollIntervalMs);
     // Scheduler tick — promotes retry_wait entries that are now due, dispatches queued issues
-    this.tickTimer = setInterval(() => {
+    this.tickTimer = setInterval(async () => {
       const now = new Date().toISOString() as IsoDateTime;
+      console.log("[Scheduler] tick at", now);
       const { commands } = this.callbacks.onEvent({ type: "scheduler.tick", now });
-      void this.callbacks.executeCommands(commands);
+      console.log("[Scheduler] tick produced", commands.length, "commands");
+      await this.callbacks.executeCommands(commands);
     }, this.tickIntervalMs);
 
     // Linear poller — fail-open: LinearUnavailableError is swallowed (logged only)
     this.pollTimer = setInterval(() => {
       void (async () => {
         const polledAt = new Date().toISOString() as IsoDateTime;
+        console.log("[Scheduler] poll timer fired at", polledAt);
         try {
+          console.log("[Scheduler] pollLinear at", polledAt);
           const issues = await this.callbacks.pollLinear();
+          console.log("[Scheduler] pollLinear returned", issues.length, "issues");
           const { commands } = this.callbacks.onEvent({ type: "linear.polled", issues, polledAt });
+          console.log("[Scheduler] linear.polled produced", commands.length, "commands");
           await this.callbacks.executeCommands(commands);
         } catch (err) {
           if (err instanceof LinearUnavailableError) {
@@ -179,7 +186,9 @@ export class OrchestratorEngine {
   /** Run one scheduler tick manually (for debugging). */
   runOnce(): OrchestratorCommand[] {
     const now = new Date().toISOString() as IsoDateTime;
+    console.log("[Scheduler] runOnce tick at", now);
     const { commands } = this.emitEvent({ type: "scheduler.tick", now });
+    console.log("[Scheduler] runOnce produced", commands.length, "commands");
     return commands;
   }
 }

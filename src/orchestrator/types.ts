@@ -20,6 +20,10 @@ export interface WorkflowFrontMatter {
     teamIds?: string[];
     states?: string[];
     labels?: string[];
+    stateIds?: {
+      inProgress?: string;
+      done?: string;
+    };
   };
   workspace: {
     root: WorkspaceRoot;

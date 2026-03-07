@@ -15,7 +15,8 @@ export type OrchestratorCommand =
   | { type: "spawn_and_run_worker";   issueId: IssueId; attemptId: AttemptId }
   | { type: "spawn_and_run_reviewer"; issueId: IssueId; attemptId: AttemptId; workerResult: import("./types.js").WorkResult }
   | { type: "schedule_retry";         issueId: IssueId; entry: RetryEntry }
-  | { type: "close_session";          sessionId: SessionId; reason: string };
+  | { type: "close_session";          sessionId: SessionId; reason: string }
+  | { type: "update_linear_state";    issueId: IssueId; stateId: string };
 
 export function computeBackoffMs(attempt: number, maxMs: Millis): Millis {
   return Math.min(10000 * Math.pow(2, attempt - 1), maxMs as number) as Millis;
@@ -39,9 +40,14 @@ export function applyEvent(
         if (!state.issueLifecycleById.has(issue.id)) {
           state.issueLifecycleById.set(issue.id, { kind: "discovered", firstSeenAt: evt.polledAt });
         }
-        // Enqueue issues in "started" state
-        if (issue.state.type === "started" && !state.runningIssueIds.has(issue.id)) {
+        const lifecycle = state.issueLifecycleById.get(issue.id);
+        const terminal = lifecycle?.kind === "succeeded" || lifecycle?.kind === "failed";
+        const alreadyRunning = state.runningIssueIds.has(issue.id);
+        const alreadyQueued = state.queuedIssueIds.has(issue.id);
+
+        if (!terminal && !alreadyRunning && !alreadyQueued) {
           state.queuedIssueIds.add(issue.id);
+          state.issueLifecycleById.set(issue.id, { kind: "queued", queuedAt: evt.polledAt, reason: "linear.polled" });
         }
       }
       break;
@@ -77,6 +83,11 @@ export function applyEvent(
         attempt,
         startedAt: evt.at,
       });
+      // Emit command to update Linear state to "In Progress"
+      const inProgressStateId = state.workflow.frontMatter.linear.stateIds?.inProgress;
+      if (inProgressStateId) {
+        commands.push({ type: "update_linear_state", issueId: evt.issueId, stateId: inProgressStateId });
+      }
       break;
     }
 
@@ -85,7 +96,7 @@ export function applyEvent(
       if (!lc || (lc.kind !== "running" && lc.kind !== "needs_changes")) break;
       state.issueLifecycleById.set(evt.issueId, {
         kind: "awaiting_review",
-        sessionId: (lc as { sessionId?: SessionId }).sessionId ?? ("" as SessionId),
+        sessionId: lc.sessionId ?? ("" as SessionId),
         attempt: (lc as { attempt?: number }).attempt ?? 1,
         workerAttemptId: evt.attemptId,
         startedAt: evt.at,
@@ -152,6 +163,11 @@ export function applyEvent(
         if (evt.result.prDraft) succeededState.pr = evt.result.prDraft;
         state.issueLifecycleById.set(evt.issueId, succeededState);
         state.runningIssueIds.delete(evt.issueId);
+        // Emit command to update Linear state to "Done"
+        const doneStateId = state.workflow.frontMatter.linear.stateIds?.done;
+        if (doneStateId) {
+          commands.push({ type: "update_linear_state", issueId: evt.issueId, stateId: doneStateId });
+        }
         const sid = state.sessionIdByIssueId.get(evt.issueId);
         if (sid) commands.push({ type: "close_session", sessionId: sid, reason: "completed" });
       } else {

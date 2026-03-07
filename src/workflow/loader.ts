@@ -61,6 +61,12 @@ function validateFrontMatter(raw: unknown): WorkflowFrontMatter {
   if (Array.isArray(linear["teamIds"])) linearConfig.teamIds = linear["teamIds"] as string[];
   if (Array.isArray(linear["states"])) linearConfig.states = linear["states"] as string[];
   if (Array.isArray(linear["labels"])) linearConfig.labels = linear["labels"] as string[];
+  if (typeof linear["stateIds"] === "object" && linear["stateIds"] !== null) {
+    const stateIds = linear["stateIds"] as Record<string, unknown>;
+    linearConfig.stateIds = {};
+    if (typeof stateIds["inProgress"] === "string") linearConfig.stateIds.inProgress = stateIds["inProgress"];
+    if (typeof stateIds["done"] === "string") linearConfig.stateIds.done = stateIds["done"];
+  }
 
   const appServerConfig: WorkflowFrontMatter["appServer"] = {
     command: appServer["command"] as string,
