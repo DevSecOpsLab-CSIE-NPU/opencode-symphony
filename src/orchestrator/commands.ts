@@ -19,13 +19,13 @@ import type { OpenCodeAgentClient } from "../worker/OpenCodeAgentClient.js";
 import type { ReviewerWorkflow, ReviewerWorkflowOptions } from "../reviewer/ReviewerWorkflow.js";
 import type { LiquidRenderer } from "../workflow/LiquidRenderer.js";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
 // Deps injected into executeCommands
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────
 
 export interface CommandDeps {
   getState: () => OrchestratorState;
-  emitEvent: (evt: OrchestratorEvent) => void;
+  emitEvent: (evt: OrchestratorEvent) => { state: OrchestratorState; commands: OrchestratorCommand[] };
   linear: LinearClient;
   workspaceManager: WorkspaceManager;
   agentClient: OpenCodeAgentClient;
@@ -35,16 +35,22 @@ export interface CommandDeps {
   createReviewerWorkflow?: (opts: ReviewerWorkflowOptions) => ReviewerWorkflow;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// executeCommands — main dispatch
-// ─────────────────────────────────────────────────────────────────────────────
+export async function emitEventAndExecute(
+  evt: OrchestratorEvent,
+  deps: CommandDeps,
+): Promise<{ state: OrchestratorState; commands: OrchestratorCommand[] }> {
+  const result = deps.emitEvent(evt);
+  await executeCommands(result.commands, deps);
+  return result;
+}
+
+// ───────────────────────────── Main Dispatch ──────────────────────────
 
 export async function executeCommands(
   commands: OrchestratorCommand[],
   deps: CommandDeps,
 ): Promise<void> {
   for (const cmd of commands) {
-    // Execute commands sequentially to ensure proper ordering
     await executeOneCommand(cmd, deps);
   }
 }
@@ -65,13 +71,15 @@ async function executeOneCommand(cmd: OrchestratorCommand, deps: CommandDeps): P
       break;
 
     case "close_session":
-      // Stateless implementation: no persistent app-server process to close.
+      await handleCloseSession(cmd.sessionId, cmd.reason, deps);
       break;
 
     case "update_linear_state":
       await handleUpdateLinearState(cmd.issueId, cmd.stateId, deps);
       break;
-      // Stateless implementation: no persistent app-server process to close.
+
+    case "create_pull_request":
+      await handleCreatePullRequest(cmd.issueId, cmd.prDraft, deps);
       break;
 
     default: {
@@ -81,9 +89,7 @@ async function executeOneCommand(cmd: OrchestratorCommand, deps: CommandDeps): P
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// spawn_and_run_worker
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────── spawn_and_run_worker ────────────────────────────
 
 async function handleSpawnWorker(issueId: IssueId, deps: CommandDeps): Promise<void> {
   const state = deps.getState();
@@ -103,8 +109,7 @@ async function handleSpawnWorker(issueId: IssueId, deps: CommandDeps): Promise<v
     preLc?.kind === "needs_changes" ? preLc.reviewSummary : undefined;
 
   // Mark issue as started in the state machine
-  deps.emitEvent({ type: "issue.start_work", issueId, at: now() });
-
+  await emitEventAndExecute({ type: "issue.start_work", issueId, at: now() }, deps);
 
 
   // Provision workspace
@@ -115,7 +120,7 @@ async function handleSpawnWorker(issueId: IssueId, deps: CommandDeps): Promise<v
     workspacePath = ws.absPath;
     workspaceId = ws.identifier;
   } catch (err) {
-    deps.emitEvent({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() });
+    await emitEventAndExecute({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() }, deps);
     return;
   }
 
@@ -127,11 +132,9 @@ async function handleSpawnWorker(issueId: IssueId, deps: CommandDeps): Promise<v
       { issue, attempt },
     );
   } catch (err) {
-    deps.emitEvent({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() });
+    await emitEventAndExecute({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() }, deps);
     return;
   }
-
-  // (continuationGuidance already captured above, before issue.start_work)
 
   const opts: WorkerRunnerOptions = {
     issue,
@@ -163,29 +166,27 @@ async function handleSpawnWorker(issueId: IssueId, deps: CommandDeps): Promise<v
         ...(result.turns !== undefined && { notes: `turns=${result.turns}` }),
       };
       recordAttempt(state, issueId, attemptId);
-      deps.emitEvent({ type: "worker.finished", issueId, attemptId, result: workResult, at: now() });
+      await emitEventAndExecute({ type: "worker.finished", issueId, attemptId, result: workResult, at: now() }, deps);
     } else if (result.status === "cancelled") {
-      deps.emitEvent({ type: "attempt.canceled", issueId, attemptId, at: now() });
+      await emitEventAndExecute({ type: "attempt.canceled", issueId, attemptId, at: now() }, deps);
     } else {
       const error = result.error
         ? { name: result.error.code, message: result.error.message }
         : { name: "WorkerError", message: result.status };
       recordAttempt(state, issueId, attemptId);
-      deps.emitEvent({ type: "worker.failed", issueId, attemptId, error, at: now() });
+      await emitEventAndExecute({ type: "worker.failed", issueId, attemptId, error, at: now() }, deps);
     }
   } catch (err: unknown) {
     recordAttempt(state, issueId, attemptId);
     if (err instanceof Error && err.message === "worker timeout") {
-      deps.emitEvent({ type: "attempt.timed_out", issueId, attemptId, role: "worker", at: now() });
+      await emitEventAndExecute({ type: "attempt.timed_out", issueId, attemptId, role: "worker", at: now() }, deps);
     } else {
-      deps.emitEvent({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() });
+      await emitEventAndExecute({ type: "worker.failed", issueId, attemptId, error: toSerializable(err), at: now() }, deps);
     }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// spawn_and_run_reviewer
-// ─────────────────────────────────────────────────────────────────────────────
+// ──────────────────── spawn_and_reviewer ───────────────────────────────
 
 async function handleSpawnReviewer(
   issueId: IssueId,
@@ -201,7 +202,7 @@ async function handleSpawnReviewer(
 
   const attemptId = randomUUID() as AttemptId;
   const lc = state.issueLifecycleById.get(issueId);
-  const attempt = (lc as { attempt?: number } | undefined)?.attempt ?? 1;
+  const attempt = (lc as any)?.attempt ?? 1;
   const sessionId = state.sessionIdByIssueId.get(issueId) ?? ("" as SessionId);
   const workspacePath = state.sessionsById.get(sessionId)?.workspacePath ?? "";
 
@@ -225,22 +226,151 @@ async function handleSpawnReviewer(
 
   try {
     const result = await Promise.race([workflow.run(), reviewerTimeout]);
-    deps.emitEvent({ type: "reviewer.finished", issueId, attemptId, result, at: now() });
+    await emitEventAndExecute({ type: "reviewer.finished", issueId, attemptId, result, at: now() }, deps);
   } catch (err: unknown) {
     if (err instanceof Error && err.message === "reviewer timeout") {
-      deps.emitEvent({ type: "attempt.timed_out", issueId, attemptId, role: "reviewer", at: now() });
+      await emitEventAndExecute({ type: "attempt.timed_out", issueId, attemptId, role: "reviewer", at: now() }, deps);
     } else {
-      deps.emitEvent({ type: "reviewer.failed", issueId, attemptId, error: toSerializable(err), at: now() });
+      await emitEventAndExecute({ type: "reviewer.failed", issueId, attemptId, error: toSerializable(err), at: now() }, deps);
     }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// ──────────────────── create_pull_request ──────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// update_linear_state
-// ─────────────────────────────────────────────────────────────────────────────
+async function handleCreatePullRequest(issueId: IssueId, prDraft: import('./orchestrator/types.js').PullRequestDraft, deps: CommandDeps): Promise<void> {
+  const state = deps.getState();
+  const issue = state.issuesById.get(issueId);
+  if (!issue) {
+    console.warn(`[commands] create_pull_request: unknown issueId=${issueId}`);
+    return;
+  }
+
+  try {
+    let workspacePath = "";
+    for (const session of state.sessionsById.values()) {
+      workspacePath = session.workspacePath;
+      break;
+    }
+    
+    if (!workspacePath) {
+      console.warn(`[commands] create_pull_request: no workspace found for issue ${issue.key}`);
+      return;
+    }
+
+    const execFile = (await import("node:child_process")).execFile;
+    const promisify = (await import("node:util")).promisify;
+    const execAsync = promisify(execFile);
+
+    const prBranch = `symphony/${issue.key.toLowerCase()}-${Date.now()}`;
+
+    await execAsync("git", ["add", "."], {
+      cwd: workspacePath,
+      timeout: 30_000,
+    });
+
+    const mainBranch = await getMainBranch(workspacePath);
+
+    await execAsync("git", ["commit", "-m", prDraft.title], {
+      cwd: workspacePath,
+      timeout: 30_000,
+    });
+
+    await execAsync("git", ["checkout", "-b", prBranch], {
+      cwd: workspacePath,
+      timeout: 30_000,
+    });
+
+    await execAsync("git", ["push", "-u", "origin", prBranch], {
+      cwd: workspacePath,
+      timeout: 60_000,
+    });
+
+    const result = await execAsync("gh", [
+      "pr",
+      "create",
+      "--title", prDraft.title,
+      "--body", prDraft.body,
+      "--base", mainBranch,
+      "--head", prBranch,
+    ], {
+      cwd: workspacePath,
+      env: { ...process.env },
+      timeout: 60_000,
+    });
+
+    const prUrl = result.stdout.trim();
+    console.log(`[commands] Created PR ${prUrl} for issue ${issue.key}`);
+
+    try {
+      await deps.linear.linkPRAttachment(issue.id, prDraft.title, prUrl);
+    } catch (linkErr) {
+      console.warn(`[commands] Failed to link PR attachment: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`);
+    }
+
+  } catch (err: unknown) {
+    console.warn(
+      `[commands] Failed to create PR for issue ${issue.key}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+// ──────────────────── close_session with workspace cleanup ──────────────
+
+async function handleCloseSession(sessionId: SessionId, reason: string, deps: CommandDeps): Promise<void> {
+  const state = deps.getState();
+  const session = state.sessionsById.get(sessionId);
+  if (!session) {
+    console.warn(`[commands] close_session: unknown sessionId=${sessionId}`);
+    return;
+  }
+
+  // Determine cleanup based on issue completion state
+  const issueId = state.sessionIdByIssueId.get(sessionId);
+  if (!issueId) return;
+
+  const issueLifecycle = state.issueLifecycleById.get(issueId);
+  
+  // Get workspace policies from workflow config
+  const cfg = state.workflow.frontMatter.workspace;
+  const cleanupOnSuccess = cfg.cleanupOnSuccess ?? true;
+  const cleanupOnFailure = cfg.cleanupOnFailure ?? false;
+  const retentionDays = parseInt(cfg.keepHistoryDays ?? "30") || 30;
+
+  let shouldCleanup = false;
+
+  if (reason === "completed") {
+    if (cleanupOnSuccess) {
+      shouldCleanup = true;
+      console.log(`[commands] Cleaning up workspace ${session.workspacePath} for completed issue`);
+    }
+  } else if (["failed", "canceled"].includes(issueLifecycle?.kind ?? "")) {
+    if (cleanupOnFailure) {
+      shouldCleanup = true;
+      console.log(`[commands] Cleaning up workspace ${session.workspacePath} for failed/canceled issue`);
+    }
+  }
+  // timeout reason: keep workspace for debugging
+
+  if (shouldCleanup) {
+    try {
+      await deps.workspaceManager.cleanupWorkspace(sessionId);
+      console.log(`[commands] Successfully cleaned up workspace sessionId=${sessionId}`);
+    } catch (cleanupErr) {
+      console.warn(`[commands] Cleanup failed for ${session.workspacePath}:`, cleanupErr instanceof Error ? cleanupErr.message : cleanupErr);
+    }
+  }
+
+  // Check old workspaces by retention policy
+  try {
+    await deps.workspaceManager.cleanupOldWorkspaces(retentionDays);
+  } catch (err) {
+    console.warn(`[commands] Old workspace cleanup failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+// ──────────────────── update_linear_state ──────────────────────────────
 
 async function handleUpdateLinearState(issueId: IssueId, stateId: string, deps: CommandDeps): Promise<void> {
   const state = deps.getState();
@@ -252,17 +382,16 @@ async function handleUpdateLinearState(issueId: IssueId, stateId: string, deps: 
 
   try {
     await deps.linear.updateIssueState(issue.id, stateId);
-    console.log(`[commands] Updated Linear state for issue ${issue.key} (${issue.id}) to stateId=${stateId}`);
+    console.log(`[commands] Updated Linear state for issue ${issue.key} to stateId=${stateId}`);
   } catch (err) {
     console.warn(
       `[commands] Failed to update Linear state for issue ${issue.key}:`,
       err instanceof Error ? err.message : String(err),
     );
-    // Don't fail the entire orchestrator if Linear API call fails
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────── Helpers ──────────────────────────────────
 
 function recordAttempt(state: OrchestratorState, issueId: IssueId, attemptId: AttemptId): void {
   const existing = state.attemptIdsByIssueId.get(issueId) ?? [];
@@ -284,3 +413,13 @@ function toSerializable(err: unknown): { name: string; message: string; stack?: 
   }
   return { name: "UnknownError", message: String(err) };
 }
+
+async function getMainBranch(workspacePath: string): Promise<string> {
+  try {
+    const execSync = (await import("node:child_process")).execSync;
+    return execSync("git symbolic-ref refs/remotes/origin/HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "main";
+  }
+}
+

@@ -1,4 +1,19 @@
 node_modules/
 dist/
 *.js.map
+
+# Environment files
 .env
+.env.local
+.env.*.local
+
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# OS files
+.DS_Store
+Thumbs.db

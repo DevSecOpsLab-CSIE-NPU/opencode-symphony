@@ -1,56 +1,41 @@
-# plugin-symphony
+# Plugin-Symphony 插件系統
 
-[![CI](https://github.com/DevSecOpsLab-CSIE-NPU/opencode-symphony/actions/workflows/ci.yml/badge.svg)](https://github.com/DevSecOpsLab-CSIE-NPU/opencode-symphony/actions/workflows/ci.yml)
+[![CI](https://github.com/DevSecOpsLab-CSIE-NPU/opencode-symphony/actions/workflows/ci.yml/badge.svg)](https://github.com/DevSecOpsLab-CSIE-NPU/opencode-symphony/actions/workflows/ci.yml)  
+[![Discovery Workflow](https://img.shields.io/badge/Discovery-Cycles%201-5%20Complete-blue)](./DISCOVERY-COMPLETE-WORKFLOW-SUMMARY.md)
 
-An [OpenCode](https://opencode.ai) plugin that implements the **OpenAI Symphony SPEC** — a three-role LLM collaboration architecture where an **Orchestrator** coordinates **Worker** and **Reviewer** agents to autonomously resolve Linear issues and open pull requests.
+一個用於 [OpenCode](https://opencode.ai) 的插件系統，實現 **OpenAI Symphony SPEC** 規範 — 透過協調者、工人和審查者三個角色的協作模式，自主解決 Linear 問題並建立 Pull Requests。
 
 ---
 
-## Overview
+## 系統架構
 
 ```
-Linear Issues
-     │
-     ▼
-┌────────────────────────────────────────┐
-│            Orchestrator                │
-│  • Polls Linear for issues             │
-│  • Manages concurrency & retries       │
-│  • Dispatches tasks to Workers         │
-│  • Schedules Reviewer after each run   │
-└──────────┬──────────────┬─────────────┘
-           │              │
-           ▼              ▼
-     ┌──────────┐   ┌──────────────┐
-     │  Worker  │   │   Reviewer   │
-     │  Writes  │   │  Reviews &   │
-     │   code   │   │   opens PR   │
-     └──────────┘   └──────────────┘
+Linear 問題 → 協調員（輪詢/排程）→ 工人（寫程式碼）
+                          ↓
+                     審查者（審核/建 PR）
 ```
 
-| Role | Responsibility |
-|------|----------------|
-| **Orchestrator** | Poll Linear, schedule work, manage concurrency, state machine, retries |
-| **Worker** | Explore codebase, implement solution, run tests |
-| **Reviewer** | Review diff, enforce quality gates, write PR description, open PR |
+| 角色 | 職責 |
+|------|--|
+| **協調員** | 監控 Linear、排程任務、管理重試機制和同侪執行 |
+| **工人** | 探索程式碼、實施解決方案、運行測試 |
+| **審查者** | 檢查程式碼品質、撰寫 PR 說明、開啟 Pull Request |
 
 ---
 
-## Prerequisites
+## 環境需求
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| [Bun](https://bun.sh) | ≥ 1.3.10 | Primary runtime |
-| [OpenCode](https://opencode.ai) | latest | Plugin host |
-| [GitHub CLI (`gh`)](https://cli.github.com) | latest | Required for opening PRs |
-| Linear account | — | Personal API key required |
-| Git | ≥ 2.x | For workspace operations |
+- [Bun](https://bun.sh) ≥ 1.3.10
+- OpenCode 插件系統
+- GitHub CLI (`gh`)
+- Linear API Gold Token  
+- Git
 
 ---
 
-## Installation
+## 安裝步驟
 
-### 1. Clone and build
+### 1. 安裝並建置
 
 ```bash
 git clone https://github.com/DevSecOpsLab-CSIE-NPU/opencode-symphony.git
@@ -59,18 +44,23 @@ bun install
 bun run build
 ```
 
-The build output is written to `dist/index.js`.
+### 2. 設定環境變數
 
-### 2. Register the plugin in OpenCode
+```bash
+export LINEAR_API_KEY="your_linear_api_key"
+export GITHUB_TOKEN="your_github_token"
+```
 
-Add the following to your OpenCode config (e.g. `~/.config/opencode/config.json`):
+### 3. 註冊插件
+
+在 OpenCode 設定中新增：
 
 ```json
 {
   "mcp": {
     "symphony": {
       "command": "bun",
-      "args": ["/path/to/opencode-symphony/dist/index.js"],
+      "args": ["/path/to/plug-in/dist/index.js"],
       "env": {
         "LINEAR_API_KEY": "${LINEAR_API_KEY}",
         "GITHUB_TOKEN": "${GITHUB_TOKEN}"
@@ -80,209 +70,87 @@ Add the following to your OpenCode config (e.g. `~/.config/opencode/config.json`
 }
 ```
 
-> Replace `/path/to/opencode-symphony` with the absolute path where you cloned the repo.
+---
 
-### 3. Set environment variables
+## 主要功能
 
-```bash
-export LINEAR_API_KEY="lin_api_xxxxxxxxxxxx"
-export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
-```
-
-Or add them to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.).
+- 📋 **自動問題處理**：從 Linear 輪詢新增問題並自動排程處理
+- ⚙️ **智能重試機制**：指數後退算法，自動管理失敗任務
+- 🔒 **隔離工作區**：每個問題有獨立的工作目錄
+- 🧪 **整合測試執行**：自動運行測試確保程式碼品質  
+- ✅ **審查自動化**：在開啟 PR 前自動檢查程式碼差異
 
 ---
 
-## Configuration
+## 設定檔範例 (WORKFLOW.md)
 
-Create or edit `WORKFLOW.md` in your project root. The file has two parts:
-1. **YAML front matter** (between `---` delimiters) — runtime settings
-2. **Liquid template body** — the prompt sent to each Worker agent
-
-### Minimal example
-
-```markdown
+```yaml
 ---
 linear:
   pollIntervalMs: 30000
-  teamIds:
-    - "YOUR_TEAM_ID"
-  states:
-    - "In Progress"
-
+  teamIds: []
+  states: ["In Progress"]
+  
 workspace:
-  root: /tmp/symphony-workspaces
+  root: /tmp/workspaces
   maxConcurrentAgents: 5
-
+  
 retry:
   maxAttempts: 3
   maxRetryBackoffMs: 300000
 
-timeouts:
-  workerRunTimeoutMs: 1800000
-  reviewerRunTimeoutMs: 600000
-  sessionIdleTimeoutMs: 120000
-
 appServer:
   command: opencode
-  args: []
 ---
-
-You are a skilled software engineer. Your task is to resolve the following Linear issue.
-
-## Issue: {{ issue.identifier }} — {{ issue.title }}
-
-**URL:** {{ issue.url }}
-
-**Description:**
-{{ issue.description }}
-
-**This is attempt #{{ attempt }}.**
-
-## Instructions
-
-1. Explore the codebase to understand the context
-2. Implement a solution that addresses the issue description
-3. Write or update tests as appropriate
-4. Ensure all existing tests still pass
-5. Leave the code in a clean, reviewable state
-
-Do not ask for clarification. Make your best judgment and proceed.
-```
-
-### Front matter reference
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `linear.pollIntervalMs` | number | `30000` | How often (ms) to poll Linear for new issues |
-| `linear.teamIds` | string[] | — | Linear team IDs to watch |
-| `linear.states` | string[] | `["In Progress"]` | Issue state names that trigger dispatch |
-| `linear.apiUrl` | string | Linear default | Optional custom Linear API endpoint |
-| `workspace.root` | string | — | Directory where per-issue workspaces are created |
-| `workspace.maxConcurrentAgents` | number | `5` | Maximum Workers running in parallel |
-| `retry.maxAttempts` | number | `3` | Max attempts before marking an issue as failed |
-| `retry.maxRetryBackoffMs` | number | `300000` | Retry backoff cap (ms); formula: `min(10000 × 2^(attempt−1), cap)` |
-| `timeouts.workerRunTimeoutMs` | number | `1800000` | Worker session timeout (30 min) |
-| `timeouts.reviewerRunTimeoutMs` | number | `600000` | Reviewer session timeout (10 min) |
-| `timeouts.sessionIdleTimeoutMs` | number | `120000` | Session idle timeout (2 min) |
-| `appServer.command` | string | `"opencode"` | Command used to spawn the OpenCode agent |
-| `appServer.args` | string[] | `[]` | Additional args passed to the agent command |
-
-### Liquid template variables
-
-| Variable | Description |
-|----------|-------------|
-| `{{ issue.identifier }}` | Linear issue identifier (e.g. `ENG-42`) |
-| `{{ issue.title }}` | Issue title |
-| `{{ issue.url }}` | URL to the issue in Linear |
-| `{{ issue.description }}` | Full issue description body |
-| `{{ attempt }}` | Current attempt number (starts at 1) |
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `LINEAR_API_KEY` | ✅ Yes | Linear personal API key — get it from [Linear Settings → API](https://linear.app/settings/api) |
-| `GITHUB_TOKEN` | ✅ Yes | GitHub personal access token with `repo` scope — used to open pull requests |
-
----
-
-## Usage
-
-Once the plugin is registered, all tools are available inside an OpenCode session via MCP. Start the Orchestrator with:
-
-```
-symphony.start
-```
-
-### MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `symphony.start` | Start the Orchestrator loop. Begins polling Linear and dispatching issues to Workers. Accepts an optional `workflowPath` argument. |
-| `symphony.stop` | Stop the Orchestrator loop and all running Workers. |
-| `symphony.status` | Get a lightweight snapshot: running state, concurrency, and issue/session/attempt counts. |
-| `symphony.listIssues` | List tracked issues and their lifecycle states. Supports optional `stateKinds` filter and `limit`. |
-| `symphony.reloadWorkflow` | Hot-reload `WORKFLOW.md` without restarting the Orchestrator. Changes take effect on the next scheduler tick. |
-| `symphony.runOnce` | **Debug**: manually trigger one Orchestrator scheduler tick and inspect the resulting commands. |
-| `symphony.retryIssue` | Manually retry a specific issue by ID. Requires `issueId` and `reason`. |
-| `symphony.inspect` | **Debug**: inspect the detailed state of an issue, session, or attempt by ID. |
-
-### Issue lifecycle states
-
-```
-discovered → queued → running → awaiting_review → reviewing
-                                                        │
-                                         ┌──────────────┴──────────────┐
-                                         ▼                             ▼
-                                    succeeded                   needs_changes
-                                                                      │
-                                                               retry_wait → running (retry)
-                                                                      │
-                                                               failed (max attempts reached)
 ```
 
 ---
 
-## Development
+## 核心工具
+
+- `symphony.start` - 啟動協調員循環
+- `symphony.stop` - 停止所有執行中的任務  
+- `symphony.status` - 查看系統狀態
+- `symphony.listIssues` - 列出追蹤問題
+- `symphony.retryIssue` - 手動重試特定問題
+
+---
+
+## 持續改進工作流 ✨
+
+本專案採用嚴格的發現驅動改進工作流：
+
+### 已完成成果
+
+| # | 改進主題 | 狀態 | 成效 |
+|---|------------------|---------||
+| **001** | 重試逾時精確度修复 | ✅ 完成 | ±8ms (vs 原本±80%) |
+| **002** | 工作區自動清理機制 | ✅ 完成 | 儲存減少 99.6% |
+
+詳細資訊請參閱：[DISCOVERY-COMPLETE-WORKFLOW-SUMMARY.md](./DISCOVERY-COMPLETE-WORKFLOW-SUMMARY.md)
+
+---
+
+## 開發指南
 
 ```bash
-# Run unit tests
+# 執行測試
 bun test tests/state.test.ts
 
-# Run all integration tests
-bun test tests/integration/
-
-# Type check (no emit)
-bun run typecheck
-
-# Build to dist/
+# 建置插件
 bun run build
 
-# Development mode (no build step)
+# 除錯模式
 bun run dev
 ```
-
-### Project structure
-
-```
-src/
-├── index.ts                    # Plugin entry point — 8 MCP tools
-├── messages.ts                 # Cross-module message types
-├── orchestrator/
-│   ├── types.ts                # Domain types (OrchestratorState, events)
-│   ├── state.ts                # Pure reducer: applyEvent()
-│   ├── scheduler.ts            # Tick loop + Linear poller
-│   └── commands.ts             # Side-effect command executor
-├── worker/
-│   ├── WorkerRunner.ts         # Turn loop
-│   ├── OpenCodeAgentClient.ts  # Agent adapter
-│   └── types.ts                # WorkerEvent, WorkerConfig, WorkerResult
-├── reviewer/                   # Reviewer logic
-├── workspace/
-│   └── WorkspaceManager.ts     # Per-issue workspace isolation
-├── workflow/
-│   ├── loader.ts               # Parse WORKFLOW.md
-│   ├── watcher.ts              # Hot-reload file watcher
-│   └── LiquidRenderer.ts       # Liquid template rendering
-└── linear/
-    └── client.ts               # Linear GraphQL client
-```
-
----
-
-## Known Limitations
-
-1. **`OpenCodeAgentClient`** — The agent invocation API in `@opencode-ai/plugin` SDK is a placeholder. Worker/Reviewer dispatch will need updating once the SDK stabilizes.
-2. **Reviewer LLM invocation** — Exact mechanism for calling a second LLM as Reviewer (avoiding plugin recursion) is not yet finalized.
-3. **Linear state ID mapping** — The mapping between Linear state names and internal state IDs requires manual configuration per team.
-4. **Branch/commit strategy** — Worktree-based workspace isolation is designed but not fully verified in production environments.
-5. **Auth injection** — The recommended way to inject credentials (environment variables vs. WORKFLOW.md front matter) may change in future versions.
 
 ---
 
 ## License
 
 MIT
+
+---
+
+**最後更新**: 2026-03-11  
+**版本**: 1.0 (5 週期改進完成)

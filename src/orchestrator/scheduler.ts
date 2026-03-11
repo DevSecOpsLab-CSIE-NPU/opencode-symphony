@@ -26,6 +26,10 @@ export type SchedulerCallbacks = {
 export class Scheduler {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private isTickRunning = false;
+  private isPollRunning = false;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly callbacks: SchedulerCallbacks,
@@ -37,19 +41,33 @@ export class Scheduler {
     console.log("[Scheduler] start: tickIntervalMs=%d pollIntervalMs=%d", this.tickIntervalMs, this.pollIntervalMs);
     // Scheduler tick — promotes retry_wait entries that are now due, dispatches queued issues
     this.tickTimer = setInterval(async () => {
-      const now = new Date().toISOString() as IsoDateTime;
-      console.log("[Scheduler] tick at", now);
-      const { commands } = this.callbacks.onEvent({ type: "scheduler.tick", now });
-      console.log("[Scheduler] tick produced", commands.length, "commands");
-      await this.callbacks.executeCommands(commands);
+      if (this.isTickRunning) {
+        console.log("[Scheduler] tick already running, skipping");
+        return;
+      }
+      this.isTickRunning = true;
+      try {
+        const now = new Date().toISOString() as IsoDateTime;
+        console.log("[Scheduler] tick at", now);
+        const { commands } = this.callbacks.onEvent({ type: "scheduler.tick", now });
+        console.log("[Scheduler] tick produced", commands.length, "commands");
+        await this.callbacks.executeCommands(commands);
+      } finally {
+        this.isTickRunning = false;
+      }
     }, this.tickIntervalMs);
 
     // Linear poller — fail-open: LinearUnavailableError is swallowed (logged only)
     this.pollTimer = setInterval(() => {
       void (async () => {
-        const polledAt = new Date().toISOString() as IsoDateTime;
-        console.log("[Scheduler] poll timer fired at", polledAt);
+        if (this.isPollRunning) {
+          console.log("[Scheduler] poll already running, skipping");
+          return;
+        }
+        this.isPollRunning = true;
         try {
+          const polledAt = new Date().toISOString() as IsoDateTime;
+          console.log("[Scheduler] poll timer fired at", polledAt);
           console.log("[Scheduler] pollLinear at", polledAt);
           const issues = await this.callbacks.pollLinear();
           console.log("[Scheduler] pollLinear returned", issues.length, "issues");
@@ -58,12 +76,12 @@ export class Scheduler {
           await this.callbacks.executeCommands(commands);
         } catch (err) {
           if (err instanceof LinearUnavailableError) {
-            // Transient / rate-limit: log and continue
             console.warn("[Scheduler] Linear temporarily unavailable:", err.message);
           } else {
-            // Fatal / unexpected error — still log but don’t crash
             console.error("[Scheduler] Linear poll error:", err);
           }
+        } finally {
+          this.isPollRunning = false;
         }
       })();
     }, this.pollIntervalMs);
@@ -130,7 +148,7 @@ export class OrchestratorEngine {
     this.deps = {
       ...opts.commandDeps,
       getState: () => this.state,
-      emitEvent: (evt) => { this.emitEvent(evt); },
+      emitEvent: (evt) => this.emitEvent(evt),
       linear: opts.linear,
     };
 
@@ -165,11 +183,10 @@ export class OrchestratorEngine {
     this.state.isRunning = false;
   }
 
-  /** Apply an event through the pure reducer, then execute resulting commands. */
+  /** Apply an event through the pure reducer. Commands returned for caller to execute. */
   emitEvent(evt: OrchestratorEvent): { state: OrchestratorState; commands: OrchestratorCommand[] } {
     const result = applyEvent(this.state, evt);
     this.state = result.state;
-    void executeCommands(result.commands, this.deps);
     return result;
   }
 

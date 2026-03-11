@@ -28,6 +28,12 @@ export interface WorkflowFrontMatter {
   workspace: {
     root: WorkspaceRoot;
     maxConcurrentAgents: number; // default: 10
+    cleanupOnSuccess: boolean;      // default: true
+    cleanupOnFailure: boolean;      // default: false
+    keepHistoryDays: string;        // default: "30"
+  };
+    root: WorkspaceRoot;
+    maxConcurrentAgents: number; // default: 10
   };
   retry: {
     maxAttempts: number;

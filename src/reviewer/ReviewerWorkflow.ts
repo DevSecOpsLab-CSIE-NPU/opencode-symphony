@@ -1,20 +1,9 @@
-// src/reviewer/ReviewerWorkflow.ts — Decision tree + LLM review
-//
-// Flow:
-//   1. Run deterministic gates (no LLM).
-//   2. If any gate fails → request_changes immediately.
-//   3. If all gates pass → run LLM Reviewer in a read-only OpenCode session.
-//   4. Parse structured JSON from LLM output.
-//   5. Return ReviewResult.
+// src/editor/ReviewerWorkflow.ts — Decision tree + LLM review
 
 import type { ReviewResult, PullRequestDraft } from "../orchestrator/types.js";
 import type { LinearIssue } from "../orchestrator/types.js";
 import type { OpenCodeAgentClient } from "../worker/OpenCodeAgentClient.js";
 import { runDeterministicGates } from "./gates.js";
-
-
-// TS note: use the same interface as OpenCodeAgentClient rather than the full SDK client
-// so we can mock it in tests.
 
 export class ReviewerOutputInvalidError extends Error {
   override readonly name = "ReviewerOutputInvalidError" as const;
@@ -22,6 +11,9 @@ export class ReviewerOutputInvalidError extends Error {
     super(message);
   }
 }
+
+// TS note: use the same interface as OpenCodeAgentClient rather than the full SDK client
+// so we can mock it in tests.
 
 export interface ReviewerWorkflowOptions {
   issue: LinearIssue;
@@ -70,7 +62,7 @@ export class ReviewerWorkflow {
     }
 
     // ──────────────────────────────────────────────────
-    // Step 2: LLM Reviewer
+    // Step 2: LLM Reviewer using read-only "explore" agent
     // ──────────────────────────────────────────────────
     const reviewSessionId = `reviewer-${issue.key}-attempt${attempt}`;
     const reviewPrompt = buildReviewerPrompt({ issue, diff, workerSummary });
@@ -78,7 +70,7 @@ export class ReviewerWorkflow {
     const turnResult = await this.agentClient.runTurn({
       sessionId: reviewSessionId,
       cwd: workspacePath,
-      role: "worker", // Note: OpenCodeAgentClient currently only supports role:"worker"
+      role: "worker", 
       input: reviewPrompt,
     });
 
@@ -101,9 +93,9 @@ export class ReviewerWorkflow {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────
 
 async function getDiff(workspacePath: string): Promise<string> {
   const { promisify } = await import("node:util");
@@ -116,9 +108,9 @@ async function getDiff(workspacePath: string): Promise<string> {
 interface ReviewerLLMOutput {
   decision: "approve" | "request_changes";
   summary: string;
-  prTitle?: string;
-  prBody?: string;
-  requiredChanges?: string[];
+  prTitle?: string;         // when approve
+  prBody?: string;          // when approve (markdown)
+  requiredChanges?: string[]; // when request_changes
 }
 
 function buildReviewerPrompt(params: {
@@ -127,7 +119,7 @@ function buildReviewerPrompt(params: {
   workerSummary: string | undefined;
 }): string {
   const { issue, diff, workerSummary } = params;
-  return `You are a senior code reviewer. Review the following changes and output ONLY a JSON object (no markdown fences, no prose).
+  return `You are a senior code reviewer using OpenCode's "explore" agent (read-only only). Review the following changes and output ONLY a JSON object (no markdown fences, no prose).
 
 Issue: ${issue.key} — ${issue.title}
 URL: ${issue.url}
@@ -154,7 +146,8 @@ Rules:
 - Set decision to \"request_changes\" if there are bugs, missing tests, or the issue is not resolved.
 - requiredChanges is required when decision is request_changes.
 - prTitle and prBody are required when decision is approve.
-`;
+
+IMPORTANT: You are running in read-only mode via the "explore" agent. You CANNOT write files. Only analyze.`;
 }
 
 /** Extract the first JSON object from arbitrary text (LLM output may have prose before/after). */

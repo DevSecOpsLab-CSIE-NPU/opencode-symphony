@@ -72,6 +72,7 @@ export class OpencodeSessionClient implements OpenCodeAgentClient {
     }
 
     // Step 2: send prompt to the session
+    // Step 2: send prompt to the session
     const promptResult = await this.client.session.prompt({
       path: { id: opencodeSessionId },
       body: {
@@ -103,7 +104,7 @@ export class OpencodeSessionClient implements OpenCodeAgentClient {
     const { info, parts } = data;
 
     // Check for assistant-level errors (model errors, quota, etc.)
-    if (info.error) {
+    if (info?.error) {
       const errType = (info.error as { type?: string }).type ?? "unknown";
       // MessageAbortedError → cancelled; others → failed
       if (errType === "message_aborted") {
@@ -117,7 +118,8 @@ export class OpencodeSessionClient implements OpenCodeAgentClient {
     }
 
     // Extract summary from last text part
-    const textParts = parts.filter((p): p is { type: "text"; text: string } & typeof p =>
+    const textParts = (parts ?? []).filter((p): p is { type: "text"; text: string } & typeof p =>
+
       p.type === "text" && typeof (p as { text?: unknown }).text === "string",
     );
     const lastText = textParts[textParts.length - 1];

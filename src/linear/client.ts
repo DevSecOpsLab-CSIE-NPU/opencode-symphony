@@ -26,12 +26,9 @@ export class LinearGqlError extends Error {
 
 /** @deprecated Use LinearUnavailableError or LinearGqlError instead */
 export class LinearError extends Error {
-  constructor(
-    message: string,
-    public readonly status?: number,
-  ) {
+  override name = "LinearError";
+  constructor(message: string) {
     super(message);
-    this.name = "LinearError";
   }
 }
 
@@ -46,15 +43,25 @@ export class LinearClient {
   }
 
   private async request<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    const redactedKey = this.apiKey ? `${this.apiKey.slice(0, 6)}…` : "<empty>";
+    console.log("[LinearClient] request", {
+      apiUrl: this.apiUrl,
+      hasApiKey: Boolean(this.apiKey),
+      apiKeyPreview: redactedKey,
+      variables,
+    });
+
     const res = await fetch(this.apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // Linear API requires "Bearer <apiKey>" format
-        Authorization: `Bearer ${this.apiKey}`,
+        // Linear API: use apiKey directly, NOT "Bearer <key>"
+        Authorization: this.apiKey,
       },
       body: JSON.stringify({ query, variables }),
     });
+
+    console.log("[LinearClient] response status", res.status, res.statusText);
 
     // 401/403 → fatal auth error
     if (res.status === 401 || res.status === 403) {
@@ -74,7 +81,6 @@ export class LinearClient {
 
     if (json.errors && json.errors.length > 0) {
       const msg = json.errors.map((e) => e.message).join("; ");
-      // GQL variable errors / permission errors → fatal
       throw new LinearGqlError(msg);
     }
 
@@ -86,13 +92,36 @@ export class LinearClient {
   }
 
   async getActiveIssues(params: { teamIds?: string[]; states?: string[] }): Promise<LinearIssue[]> {
-    const { GET_ACTIVE_ISSUES } = await import("./queries.js");
     type Response = { issues: { nodes: RawIssue[] } };
-    const data = await this.request<Response>(GET_ACTIVE_ISSUES, {
+
+    // Use different query based on whether teamIds is provided
+    const hasTeamFilter = params.teamIds && params.teamIds.length > 0;
+    console.log("[LinearClient] getActiveIssues params", {
+      hasTeamFilter,
       teamIds: params.teamIds,
       states: params.states,
     });
-    return data.issues.nodes.map(normalizeIssue);
+
+    if (hasTeamFilter) {
+      const { GET_ACTIVE_ISSUES } = await import("./queries.js");
+      const data = await this.request<Response>(GET_ACTIVE_ISSUES, {
+        teamIds: params.teamIds,
+        states: params.states,
+      });
+      console.log("[LinearClient] getActiveIssues result (team filtered)", {
+        count: data.issues.nodes.length,
+      });
+      return data.issues.nodes.map(normalizeIssue);
+    } else {
+      const { GET_ACTIVE_ISSUES_ALL_TEAMS } = await import("./queries.js");
+      const data = await this.request<Response>(GET_ACTIVE_ISSUES_ALL_TEAMS, {
+        states: params.states,
+      });
+      console.log("[LinearClient] getActiveIssues result (all teams)", {
+        count: data.issues.nodes.length,
+      });
+      return data.issues.nodes.map(normalizeIssue);
+    }
   }
 
   async getIssue(id: string): Promise<LinearIssue | null> {

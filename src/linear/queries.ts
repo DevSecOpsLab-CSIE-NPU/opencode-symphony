@@ -21,6 +21,28 @@ export const GET_ACTIVE_ISSUES = `
   }
 `;
 
+export const GET_ACTIVE_ISSUES_ALL_TEAMS = `
+  query GetActiveIssuesAllTeams($states: [String!]) {
+    issues(filter: {
+      state: { name: { in: $states } }
+    }) {
+      nodes {
+        id
+        identifier
+        title
+        url
+        description
+        state { id name type }
+        priority
+        assignee { id name }
+        labels { nodes { name } }
+        updatedAt
+        createdAt
+      }
+    }
+  }
+`;
+
 export const GET_ISSUE = `
   query GetIssue($id: String!) {
     issue(id: $id) {
